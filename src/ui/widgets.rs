@@ -3977,10 +3977,7 @@ mod tests {
         let mut id2 = egui::Id::NULL;
         let mut output = ctx.run_ui(
             egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    vec2(800.0, 600.0),
-                )),
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0))),
                 ..Default::default()
             },
             |ui| {
@@ -3995,7 +3992,9 @@ mod tests {
             },
         );
         output.textures_delta.clear();
-        assert_ne!(id1, id2, "each shelf must have its own distinct UI id scope");
+        assert_ne!(
+            id1, id2,
+            "each shelf must have its own distinct UI id scope"
+        );
     }
 }
-
