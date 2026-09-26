@@ -678,13 +678,39 @@ fn play_here(app: &mut App) {
         is_episode: now.as_ref().is_some_and(|now| now.show_id.is_some()),
     });
     app.local.volume = app.settings.volume;
+    // Where the displayed song was, so the player bar shows the same time.
+    app.local.position_ms = now.as_ref().map_or(0, |now| now.position_ms);
 }
 
-/// Half a second of stereo sound shaped like music: a bass line, a chord
-/// with its overtones, and noise that thins towards the treble as a mix
-/// does, the same every time.
+/// Half a second of stereo sound shaped like a busy mix, the same every
+/// time: a bass line, chords and their overtones at uneven levels up
+/// through the mids and highs, a bright hi-hat hiss and pink noise
+/// beneath, so a visualizer shows peaks across the whole range rather
+/// than a slope from the bass.
 #[cfg(feature = "demo")]
 fn demo_sound() -> Vec<f64> {
+    // Frequency and level of each partial, uneven on purpose so
+    // neighbouring bands stand at different heights.
+    const PARTIALS: [(f64, f64); 18] = [
+        (55.0, 0.16),
+        (110.0, 0.07),
+        (146.8, 0.1),
+        (196.0, 0.04),
+        (246.9, 0.09),
+        (392.0, 0.03),
+        (523.3, 0.08),
+        (740.0, 0.025),
+        (880.0, 0.07),
+        (1174.7, 0.02),
+        (1568.0, 0.06),
+        (2093.0, 0.018),
+        (2637.0, 0.05),
+        (3520.0, 0.014),
+        (4698.6, 0.04),
+        (6271.9, 0.012),
+        (8372.0, 0.03),
+        (11175.3, 0.01),
+    ];
     let rate = f64::from(librespot_playback::SAMPLE_RATE);
     let mut seed = 0x2545_f491_u32;
     let mut white = move || {
@@ -693,27 +719,30 @@ fn demo_sound() -> Vec<f64> {
         seed ^= seed << 5;
         f64::from(seed) / f64::from(u32::MAX) - 0.5
     };
-    // Paul Kellet's economy filter turns white noise pink.
-    let (mut b0, mut b1, mut b2) = (0.0, 0.0, 0.0);
+    // Paul Kellet's economy filter turns white noise pink; the difference
+    // of two white samples leaves only the treble, like a hi-hat.
+    let (mut b0, mut b1, mut b2, mut last) = (0.0, 0.0, 0.0, 0.0);
     (0..librespot_playback::SAMPLE_RATE as usize / 2)
         .flat_map(|index| {
             let time = index as f64 / rate;
-            let tone =
-                |hertz: f64, level: f64| level * (time * hertz * std::f64::consts::TAU).sin();
             let noise = white();
             b0 = 0.99765 * b0 + noise * 0.099_046;
             b1 = 0.963 * b1 + noise * 0.296_516_4;
             b2 = 0.57 * b2 + noise * 1.052_691_3;
-            let pink = (b0 + b1 + b2 + noise * 0.1848) * 0.035;
-            let sample = tone(55.0, 0.3)
-                + tone(110.0, 0.16)
-                + tone(220.0, 0.1)
-                + tone(277.2, 0.08)
-                + tone(329.6, 0.08)
-                + tone(440.0, 0.05)
-                + tone(659.3, 0.04)
-                + tone(1318.5, 0.02)
-                + pink;
+            let pink = (b0 + b1 + b2 + noise * 0.1848) * 0.12;
+            let hiss = (noise - last) * 0.05;
+            last = noise;
+            let sample = PARTIALS
+                .iter()
+                .map(|(hertz, level)| {
+                    // Everything above the bass half again as loud, so the
+                    // skin's bars, four bands each, stand tall too.
+                    let level = if *hertz > 100.0 { level * 1.5 } else { *level };
+                    level * (time * hertz * std::f64::consts::TAU).sin()
+                })
+                .sum::<f64>()
+                + pink
+                + hiss;
             [sample, sample]
         })
         .collect()
@@ -957,6 +986,9 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
             "winamp" => {
                 app.settings.winamp_window = true;
                 app.settings.skin = None;
+                // Two screen pixels per skin pixel, whatever the display, so
+                // captures match the pages that show them.
+                app.settings.skin_scale = Some(2);
             }
             "playlist" => app.settings.playlist_open = true,
             "shade" => app.settings.winamp_shaded = true,
@@ -5678,6 +5710,56 @@ mod tests {
                 assert!(lyric.is_none());
                 let detail = detail.expect("why there are no words");
                 assert!((detail.center().x - 800.0).abs() < 2.0, "{detail:?}");
+            }
+            app.backend.shutdown();
+        }
+    }
+
+    /// The cover moves aside only once there are words: while lyrics load,
+    /// and when fetching them failed, it stays in the middle, the failure
+    /// with its retry beneath.
+    #[cfg(feature = "demo")]
+    #[test]
+    fn full_screen_lyrics_keep_the_cover_centred_until_there_are_words() {
+        let centred = |shapes: &[egui::epaint::ClippedShape], wanted: &str| {
+            shapes.iter().any(|shape| match &shape.shape {
+                // A centred label anchors at its middle, so measure what is
+                // drawn rather than where it starts.
+                egui::Shape::Text(text) if text.galley.job.text == wanted => {
+                    (shape.shape.visual_bounding_rect().center().x - 800.0).abs() < 3.0
+                }
+                _ => false,
+            })
+        };
+        for (state, below) in [
+            (Loadable::Loading, None),
+            (
+                Loadable::Failed("Connection interrupted".into()),
+                Some("Try again"),
+            ),
+        ] {
+            let (ctx, mut app) = accessible_app("lyrics-centred-while-loading");
+            apply_flags(&mut app, None, Some("lyrics-fullscreen-view"));
+            app.lyrics = state;
+            let mut shapes = Vec::new();
+            for frame in 0..10 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        time: Some(f64::from(frame) / 30.0),
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1600.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| app.frame_ui(ui),
+                );
+                output.textures_delta.clear();
+                shapes = output.shapes;
+            }
+            assert!(centred(&shapes, "Rosewood"), "the title stays centred");
+            if let Some(below) = below {
+                assert!(centred(&shapes, below), "{below} under the cover");
             }
             app.backend.shutdown();
         }

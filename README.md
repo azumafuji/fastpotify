@@ -12,6 +12,10 @@ Rust with [egui](https://github.com/emilk/egui). It plays music through
 It runs on Linux, macOS, and Windows, starts in well under a second, and has no
 browser engine.
 
+**Want WhatsApp just as fast and native?** [ZapFast](https://zapfast.rocks) is
+Spotifast's sibling: the same native interface, for WhatsApp. Both are built on [fastframe](https://github.com/crmne/fastframe), the shared
+foundation for native Rust apps built with egui.
+
 **Playback needs Spotify Premium.** Free accounts can browse and search, but
 cannot play music through Spotifast on this computer or another device.
 
