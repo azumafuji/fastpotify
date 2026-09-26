@@ -2371,17 +2371,19 @@ pub fn shelf(
     ui.add_space(8.0);
     theme::section_title(ui, palette, title);
     ui.add_space(4.0);
-    crate::autoscroll::show(
-        ui,
-        egui::ScrollArea::horizontal().id_salt(id),
-        egui::Vec2b::new(true, false),
-        |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = CARD_GAP / 2.0;
-                add_contents(ui);
-            });
-        },
-    );
+    ui.push_id(id, |ui| {
+        crate::autoscroll::show(
+            ui,
+            egui::ScrollArea::horizontal().id_salt(id),
+            egui::Vec2b::new(true, false),
+            |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = CARD_GAP / 2.0;
+                    add_contents(ui);
+                });
+            },
+        );
+    });
     ui.add_space(12.0);
 }
 
@@ -3962,4 +3964,38 @@ mod tests {
             "the control moved: description {text:?}, control {control:?}"
         );
     }
+
+    /// Multiple shelves on the same page scope their widget IDs so autoscroll
+    /// and child controls do not trigger duplicate widget ID warnings.
+    #[test]
+    fn multiple_shelves_do_not_produce_id_clashes() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let palette = Palette::dark();
+        let mut controller = crate::autoscroll::Autoscroll::default();
+        let mut id1 = egui::Id::NULL;
+        let mut id2 = egui::Id::NULL;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                controller.begin(ui.ctx(), true);
+                shelf(ui, &palette, "podcasts", "Your podcasts", |ui| {
+                    id1 = ui.id();
+                });
+                shelf(ui, &palette, "top-artists", "Your top artists", |ui| {
+                    id2 = ui.id();
+                });
+                controller.finish(ui.ctx(), true);
+            },
+        );
+        output.textures_delta.clear();
+        assert_ne!(id1, id2, "each shelf must have its own distinct UI id scope");
+    }
 }
+
